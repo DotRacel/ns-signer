@@ -182,6 +182,20 @@ def solve_cloudflare_if_present(page: Page, session: StealthySession) -> bool:
         return False
 
 
+def submit_login_form(page: Page) -> None:
+    """Click the login form submit button."""
+    submit_button = page.locator(
+        "form button[type='submit'], form button.pure-button, button[type='submit'], button.pure-button"
+    ).first
+    disabled = submit_button.evaluate(
+        "(button) => button.disabled || button.getAttribute('aria-disabled') === 'true'"
+    )
+    if disabled:
+        logger.warning("Login button appears disabled before click")
+
+    submit_button.click()
+
+
 def do_login_attempt(config: dict, attempt: int) -> Optional[list]:
     """Run one browser login attempt and return captured cookies on success."""
     username = config["username"]
@@ -204,16 +218,7 @@ def do_login_attempt(config: dict, attempt: int) -> Optional[list]:
 
         wait_for_turnstile_token(page, config["login_timeout"])
 
-        submit_button = page.locator(
-            "form button[type='submit'], form button.pure-button, button[type='submit'], button.pure-button"
-        ).first
-        disabled = submit_button.evaluate(
-            "(button) => button.disabled || button.getAttribute('aria-disabled') === 'true'"
-        )
-        if disabled:
-            logger.warning("Login button appears disabled before click")
-
-        submit_button.click()
+        submit_login_form(page)
         logger.info("Clicked login button, waiting for login result...")
 
         logger.info(
@@ -236,6 +241,11 @@ def do_login_attempt(config: dict, attempt: int) -> Optional[list]:
 
             if post_submit_solver_runs < 2 and solve_cloudflare_if_present(page, session):
                 post_submit_solver_runs += 1
+                if "signin" in page.url.lower() and page.locator("#stacked-email").count() > 0:
+                    logger.info("Re-submitting login form after Cloudflare challenge")
+                    page.fill('#stacked-email', username)
+                    page.fill('#stacked-password', password)
+                    submit_login_form(page)
                 continue
 
             errors = collect_page_errors(page)
@@ -265,7 +275,6 @@ def do_login_attempt(config: dict, attempt: int) -> Optional[list]:
         ) as session:
             session.fetch(
                 "https://www.nodeseek.com/signIn.html",
-                wait_selector="#stacked-email",
                 page_action=lambda page: page_action(page, session),
             )
     except Exception as e:
