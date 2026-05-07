@@ -1,6 +1,7 @@
 services:
   ns-signer:
     image: ${NS_SIGNER_IMAGE:-ghcr.io/dotracel/ns-signer:latest}
+    container_name: ns-signer
     build:
       context: .
     restart: unless-stopped

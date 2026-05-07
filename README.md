@@ -31,6 +31,7 @@
 services:
   ns-signer:
     image: ghcr.io/dotracel/ns-signer:latest
+    container_name: ns-signer
     restart: unless-stopped
     environment:
       NODESEEK_USERNAME: your_username
