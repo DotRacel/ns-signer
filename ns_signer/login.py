@@ -138,6 +138,50 @@ def summarize_login_responses(responses: list[dict]) -> str:
     return "; ".join(f"{r['status']} {r['url']}" for r in responses[-8:])
 
 
+def has_cloudflare_challenge(page: Page) -> bool:
+    """Detect a Cloudflare challenge that appears during or after login submit."""
+    try:
+        if any("challenges.cloudflare.com" in frame.url for frame in page.frames):
+            return True
+
+        selectors = [
+            "iframe[src*='challenges.cloudflare.com']",
+            "#cf-turnstile",
+            "#cf_turnstile",
+            ".cf-turnstile",
+            ".turnstile",
+        ]
+        for selector in selectors:
+            locator = page.locator(selector)
+            if locator.count() > 0 and locator.first.is_visible():
+                return True
+
+        content = page.content().lower()
+        return (
+            "just a moment" in content
+            or "verifying you are human" in content
+        )
+    except Exception as e:
+        logger.debug("Cloudflare challenge detection failed: %s", e)
+        return False
+
+
+def solve_cloudflare_if_present(page: Page, session: StealthySession) -> bool:
+    """Run Scrapling's Cloudflare solver when a challenge appears after submit."""
+    if not has_cloudflare_challenge(page):
+        return False
+
+    logger.info("Cloudflare challenge detected after login submit, solving...")
+    try:
+        session._cloudflare_solver(page)
+        page.wait_for_timeout(1000)
+        logger.info("Post-submit Cloudflare challenge handling finished")
+        return True
+    except Exception as e:
+        logger.error("Post-submit Cloudflare solving failed: %s", e)
+        return False
+
+
 def do_login_attempt(config: dict, attempt: int) -> Optional[list]:
     """Run one browser login attempt and return captured cookies on success."""
     username = config["username"]
@@ -150,7 +194,7 @@ def do_login_attempt(config: dict, attempt: int) -> Optional[list]:
         if any(keyword in url for keyword in LOGIN_RESPONSE_KEYWORDS):
             login_responses.append({"url": response.url, "status": response.status})
 
-    def page_action(page: Page):
+    def page_action(page: Page, session: StealthySession):
         page.on("response", record_response)
         page.wait_for_selector('#stacked-email', timeout=15000)
         logger.info("Login form ready, filling credentials...")
@@ -178,6 +222,7 @@ def do_login_attempt(config: dict, attempt: int) -> Optional[list]:
         )
 
         deadline = time.time() + (config["login_timeout"] / 1000)
+        post_submit_solver_runs = 0
         while time.time() < deadline:
             cookies = page.context.cookies()
             if has_session_cookie(cookies):
@@ -188,6 +233,10 @@ def do_login_attempt(config: dict, attempt: int) -> Optional[list]:
                 logger.info("Logged in, redirected to: %s", page.url)
                 captured_cookies.extend(cookies)
                 return
+
+            if post_submit_solver_runs < 2 and solve_cloudflare_if_present(page, session):
+                post_submit_solver_runs += 1
+                continue
 
             errors = collect_page_errors(page)
             if errors:
@@ -217,7 +266,7 @@ def do_login_attempt(config: dict, attempt: int) -> Optional[list]:
             session.fetch(
                 "https://www.nodeseek.com/signIn.html",
                 wait_selector="#stacked-email",
-                page_action=page_action,
+                page_action=lambda page: page_action(page, session),
             )
     except Exception as e:
         logger.error("Login session error: %s", e)
