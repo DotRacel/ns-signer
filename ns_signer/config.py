@@ -40,4 +40,5 @@ def get_config() -> dict:
         "attendance_mode": os.environ.get("ATTENDANCE_MODE", "fixed"),
         "headless": os.environ.get("HEADLESS", "true").lower() == "true",
         "login_timeout": int(os.environ.get("LOGIN_TIMEOUT", "120000")),
+        "login_retries": int(os.environ.get("LOGIN_RETRIES", "2")),
     }

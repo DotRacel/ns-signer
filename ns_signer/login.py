@@ -17,6 +17,7 @@ from playwright.sync_api import Page
 from .config import get_data_dir
 
 logger = logging.getLogger("nodeseek")
+LOGIN_RESPONSE_KEYWORDS = ("signin", "login", "auth", "session", "account")
 
 
 def get_cookies_file() -> Path:
@@ -51,6 +52,9 @@ def check_session_valid(cookies: list) -> bool:
     for c in cookies:
         if c.get("name") == "session":
             expires = c.get("expires", 0)
+            if expires == -1:
+                logger.info("Session cookie has no explicit expiry")
+                return True
             if expires > now:
                 remaining_days = (expires - now) / 86400
                 logger.info("Session cookie valid for %.1f more days", remaining_days)
@@ -59,77 +63,160 @@ def check_session_valid(cookies: list) -> bool:
     return False
 
 
-def do_login(config: dict) -> Optional[list]:
-    """
-    Login via StealthySession with solve_cloudflare=True.
+def has_session_cookie(cookies: list) -> bool:
+    """Return True when browser cookies include a non-expired session cookie."""
+    now = time.time()
+    return any(
+        c.get("name") == "session" and (c.get("expires", 0) == -1 or c.get("expires", 0) > now)
+        for c in cookies
+    )
 
-    The page_action callback fills the login form and clicks the button,
-    which triggers Cloudflare Turnstile. Scrapling auto-detects and solves
-    the Turnstile. After the page redirects (success), cookies are captured
-    from the browser context and persisted to disk.
 
-    Returns the cookie list on success, None on failure.
-    """
+def get_turnstile_token(page: Page) -> str:
+    """Read the embedded Turnstile response token, if the page exposes one."""
+    return page.evaluate(
+        """
+        () => {
+            const input = document.querySelector(
+                'input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"]'
+            );
+            return input && input.value ? input.value : '';
+        }
+        """
+    )
+
+
+def wait_for_turnstile_token(page: Page, timeout: int) -> bool:
+    """Wait for an embedded Turnstile token when the login form has a token field."""
+    token_field = page.locator(
+        'input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"]'
+    )
+    if token_field.count() == 0:
+        logger.info("No embedded Turnstile response field found on login form")
+        return True
+
+    logger.info("Waiting for embedded Turnstile response token...")
+    wait_ms = min(timeout, 15000)
+    deadline = time.time() + (wait_ms / 1000)
+    while time.time() < deadline:
+        if get_turnstile_token(page):
+            logger.info("Embedded Turnstile response token is present")
+            return True
+        page.wait_for_timeout(1000)
+
+    logger.warning("Embedded Turnstile response token was not produced before submit")
+    return False
+
+
+def collect_page_errors(page: Page) -> list[str]:
+    """Collect visible page text that often carries login failure reasons."""
+    messages: list[str] = []
+    selectors = [
+        '[class*="error"]',
+        '[class*="alert"]',
+        ".toast-error",
+        ".toast",
+        "[role='alert']",
+    ]
+    for selector in selectors:
+        locator = page.locator(selector)
+        for index in range(min(locator.count(), 5)):
+            item = locator.nth(index)
+            if not item.is_visible():
+                continue
+            text = item.text_content()
+            if text:
+                cleaned = " ".join(text.split())
+                if cleaned and cleaned not in messages:
+                    messages.append(cleaned)
+    return messages
+
+
+def summarize_login_responses(responses: list[dict]) -> str:
+    if not responses:
+        return "none"
+    return "; ".join(f"{r['status']} {r['url']}" for r in responses[-8:])
+
+
+def do_login_attempt(config: dict, attempt: int) -> Optional[list]:
+    """Run one browser login attempt and return captured cookies on success."""
     username = config["username"]
     password = config["password"]
     captured_cookies: list = []
+    login_responses: list[dict] = []
+
+    def record_response(response):
+        url = response.url.lower()
+        if any(keyword in url for keyword in LOGIN_RESPONSE_KEYWORDS):
+            login_responses.append({"url": response.url, "status": response.status})
 
     def page_action(page: Page):
+        page.on("response", record_response)
         page.wait_for_selector('#stacked-email', timeout=15000)
         logger.info("Login form ready, filling credentials...")
 
         page.fill('#stacked-email', username)
         page.fill('#stacked-password', password)
 
-        page.click('button.pure-button')
-        logger.info("Clicked login button, waiting for Turnstile...")
+        wait_for_turnstile_token(page, config["login_timeout"])
 
-        # Give the Turnstile widget time to appear and Scrapling time to solve it
-        page.wait_for_timeout(5000)
+        submit_button = page.locator(
+            "form button[type='submit'], form button.pure-button, button[type='submit'], button.pure-button"
+        ).first
+        disabled = submit_button.evaluate(
+            "(button) => button.disabled || button.getAttribute('aria-disabled') === 'true'"
+        )
+        if disabled:
+            logger.warning("Login button appears disabled before click")
+
+        submit_button.click()
+        logger.info("Clicked login button, waiting for login result...")
 
         logger.info(
-            "Waiting for login API call + redirect (timeout: %d ms)...",
+            "Waiting for session cookie or redirect (timeout: %d ms)...",
             config["login_timeout"],
         )
 
-        try:
-            page.wait_for_url(
-                lambda url: "signin" not in url.lower(),
-                timeout=config["login_timeout"],
-            )
-            logger.info("Logged in, redirected to: %s", page.url)
-        except Exception:
-            # Check for error toasts or messages
-            page.wait_for_timeout(3000)
-            for err_sel in ['[class*="error"]', '[class*="alert"]', ".toast-error", ".toast"]:
-                err_el = page.locator(err_sel).first
-                if err_el.count() > 0:
-                    logger.error("Login error message: %s", err_el.text_content())
-                    break
-            else:
-                logger.error(
-                    "Login timed out -- Turnstile may not have been solved. "
-                    "Try increasing LOGIN_TIMEOUT or set HEADLESS=false to debug."
-                )
-                # Take a quick peek at the page state
-                logger.error("Current URL after timeout: %s", page.url)
-            return
+        deadline = time.time() + (config["login_timeout"] / 1000)
+        while time.time() < deadline:
+            cookies = page.context.cookies()
+            if has_session_cookie(cookies):
+                logger.info("Logged in, session cookie captured")
+                captured_cookies.extend(cookies)
+                return
+            if "signin" not in page.url.lower():
+                logger.info("Logged in, redirected to: %s", page.url)
+                captured_cookies.extend(cookies)
+                return
 
-        page.wait_for_timeout(2000)
-        cookies = page.context.cookies()
-        logger.info("Captured %d cookies from browser", len(cookies))
-        captured_cookies.extend(cookies)
+            errors = collect_page_errors(page)
+            if errors:
+                logger.error("Login error message: %s", " | ".join(errors))
+                return
+
+            page.wait_for_timeout(1000)
+
+        token = get_turnstile_token(page)
+        logger.error("Login attempt %d timed out", attempt)
+        logger.error("Current URL after timeout: %s", page.url)
+        logger.error("Embedded Turnstile token present: %s", bool(token))
+        logger.error("Login-related responses: %s", summarize_login_responses(login_responses))
 
     try:
-        logger.info("Launching stealthy browser (headless=%s)...", config["headless"])
+        logger.info(
+            "Launching stealthy browser for login attempt %d/%d (headless=%s)...",
+            attempt,
+            config["login_retries"],
+            config["headless"],
+        )
         with StealthySession(
             headless=config["headless"],
             solve_cloudflare=True,
             timeout=config["login_timeout"],
-            block_ads=True,
         ) as session:
             session.fetch(
                 "https://www.nodeseek.com/signIn.html",
+                wait_selector="#stacked-email",
                 page_action=page_action,
             )
     except Exception as e:
@@ -137,10 +224,34 @@ def do_login(config: dict) -> Optional[list]:
         return None
 
     if captured_cookies:
-        save_cookies(captured_cookies)
+        logger.info("Captured %d cookies from browser", len(captured_cookies))
         return captured_cookies
 
-    logger.error("No cookies captured after login")
+    logger.error("No cookies captured after login attempt %d", attempt)
+    return None
+
+
+def do_login(config: dict) -> Optional[list]:
+    """
+    Login via StealthySession with solve_cloudflare=True.
+
+    Scrapling solves Cloudflare challenges before the page_action runs. The login
+    action then waits for any embedded Turnstile token, submits the form, and
+    treats either a session cookie or a redirect away from the sign-in page as
+    success.
+
+    Returns the cookie list on success, None on failure.
+    """
+    for attempt in range(1, config["login_retries"] + 1):
+        captured_cookies = do_login_attempt(config, attempt)
+        if captured_cookies:
+            save_cookies(captured_cookies)
+            return captured_cookies
+        if attempt < config["login_retries"]:
+            logger.info("Login failed, retrying in 5 seconds...")
+            time.sleep(5)
+
+    logger.error("No cookies captured after %d login attempts", config["login_retries"])
     return None
 
 
