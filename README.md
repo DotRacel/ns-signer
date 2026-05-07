@@ -2,7 +2,13 @@
   <img src="images/logo.png" alt="ns-signer logo">
 </div>
 
-Nodeseek 每日自动签到工具
+<div style="display: flex; justify-content: center;">
+  <a href="https://github.com/DotRacel/ns-signer/actions/workflows/docker-image.yml">
+    <img src="https://github.com/DotRacel/ns-signer/actions/workflows/docker-image.yml/badge.svg" alt="Docker Image">
+  </a>
+</div>
+
+<h1 align="center">Nodeseek 每日自动签到工具</h1>
 
 ## 功能
 
