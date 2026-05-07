@@ -3,19 +3,19 @@
 Nodeseek Daily Auto Sign-in -- entry point.
 
 Usage:
-  python main.py               # Start the scheduler (daily loop)
-  python main.py --once         # Check in once and exit
-  python main.py --login        # Force re-login and exit
+  python -m ns_signer.main               # Start the scheduler (daily loop)
+  python -m ns_signer.main --once         # Check in once and exit
+  python -m ns_signer.main --login        # Force re-login and exit
 """
 
 import sys
 import logging
 import argparse
 
-from config import get_data_dir, load_env, get_config
-from login import get_valid_cookies, do_login
-from attendance import do_attendance
-from scheduler import run_scheduler
+from .config import get_data_dir, load_env, get_config
+from .login import get_valid_cookies, do_login
+from .attendance import do_attendance
+from .scheduler import run_scheduler
 
 load_env()
 

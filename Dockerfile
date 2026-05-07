@@ -15,4 +15,4 @@ COPY . .
 
 VOLUME ["/data"]
 
-CMD ["python", "main.py"]
+CMD ["python", "-m", "ns_signer.main"]

@@ -49,11 +49,11 @@ services:
 手动执行一次签到：
 
 ```bash
-docker compose run --rm ns-signer python main.py --once
+docker compose run --rm ns-signer python -m ns_signer.main --once
 ```
 
 强制重新登录并刷新 cookies：
 
 ```bash
-docker compose run --rm ns-signer python main.py --login
+docker compose run --rm ns-signer python -m ns_signer.main --login
 ```

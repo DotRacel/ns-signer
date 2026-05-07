@@ -14,7 +14,7 @@ from typing import Optional
 from scrapling.fetchers import StealthySession
 from playwright.sync_api import Page
 
-from config import get_data_dir
+from .config import get_data_dir
 
 logger = logging.getLogger("nodeseek")
 

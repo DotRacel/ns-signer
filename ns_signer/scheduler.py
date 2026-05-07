@@ -10,8 +10,8 @@ import random
 import logging
 from datetime import datetime, timedelta
 
-from login import get_valid_cookies, do_login
-from attendance import do_attendance
+from .login import get_valid_cookies, do_login
+from .attendance import do_attendance
 
 logger = logging.getLogger("nodeseek")
 
