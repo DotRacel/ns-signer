@@ -1,0 +1,11 @@
+# Credentials and secrets
+.env
+cookies.json
+
+# Logs
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
