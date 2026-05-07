@@ -1,0 +1,10 @@
+.git
+.github
+.env
+cookies.json
+signer.log
+__pycache__/
+*.pyc
+.venv/
+.playwright-cli/
+output/

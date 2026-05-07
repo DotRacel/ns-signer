@@ -12,12 +12,16 @@ import sys
 import logging
 import argparse
 
-from config import BASE_DIR, load_env, get_config
+from config import get_data_dir, load_env, get_config
 from login import get_valid_cookies, do_login
 from attendance import do_attendance
 from scheduler import run_scheduler
 
-LOG_FILE = BASE_DIR / "signer.log"
+load_env()
+
+DATA_DIR = get_data_dir()
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+LOG_FILE = DATA_DIR / "signer.log"
 
 logging.basicConfig(
     level=logging.INFO,

@@ -25,6 +25,11 @@ def load_env():
                 os.environ[key] = value
 
 
+def get_data_dir() -> Path:
+    """Return the directory used for runtime state such as cookies and logs."""
+    return Path(os.environ.get("DATA_DIR", BASE_DIR)).expanduser()
+
+
 def get_config() -> dict:
     """Return typed configuration from environment."""
     return {

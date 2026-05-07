@@ -14,23 +14,30 @@ from typing import Optional
 from scrapling.fetchers import StealthySession
 from playwright.sync_api import Page
 
-from config import BASE_DIR
+from config import get_data_dir
 
-COOKIES_FILE = BASE_DIR / "cookies.json"
 logger = logging.getLogger("nodeseek")
 
 
+def get_cookies_file() -> Path:
+    data_dir = get_data_dir()
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return data_dir / "cookies.json"
+
+
 def save_cookies(cookies: list):
-    COOKIES_FILE.write_text(json.dumps(cookies, indent=2, ensure_ascii=False))
-    logger.info("Cookies saved to %s", COOKIES_FILE)
+    cookies_file = get_cookies_file()
+    cookies_file.write_text(json.dumps(cookies, indent=2, ensure_ascii=False))
+    logger.info("Cookies saved to %s", cookies_file)
 
 
 def load_cookies() -> Optional[list]:
     """Load saved Playwright-format cookies, or None if missing/corrupt."""
-    if not COOKIES_FILE.exists():
+    cookies_file = get_cookies_file()
+    if not cookies_file.exists():
         return None
     try:
-        cookies = json.loads(COOKIES_FILE.read_text())
+        cookies = json.loads(cookies_file.read_text())
         if cookies:
             return cookies
     except (json.JSONDecodeError, KeyError):
