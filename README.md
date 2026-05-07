@@ -1,6 +1,6 @@
-<p align="center">
-  <img src="images/logo.png" alt="ns-signer logo" width="180">
-</p>
+<div style="display: flex; justify-content: center;">
+  <img src="images/logo.png" alt="ns-signer logo">
+</div>
 
 # ns-signer
 
