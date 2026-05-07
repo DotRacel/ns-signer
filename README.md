@@ -2,9 +2,7 @@
   <img src="images/logo.png" alt="ns-signer logo">
 </div>
 
-# ns-signer
-
-Nodeseek 每日自动签到工具。使用 Docker Compose 部署，容器会定时运行签到任务，并把登录 cookies 和日志持久化保存。
+Nodeseek 每日自动签到工具
 
 ## 功能
 
