@@ -7,8 +7,8 @@ DynamicSession browser context. The saved session cookies are injected
 via page_setup before navigation so the JS fetch carries them.
 
 Query params:
-  random=true  -> fixed 5 chicken legs
-  random=false -> random chicken legs ("try your luck")
+  random=false -> fixed 5 chicken legs
+  random=true  -> random chicken legs ("try your luck")
 """
 
 import logging
@@ -25,7 +25,7 @@ def do_attendance(config: dict, cookies: list) -> bool:
 
     Returns True on success, False on failure.
     """
-    random_param = "true" if config["attendance_mode"] == "fixed" else "false"
+    random_param = "true" if config["attendance_mode"] == "random" else "false"
     result_container: list = []
 
     def page_setup(page: Page):
