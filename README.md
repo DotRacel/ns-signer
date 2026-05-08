@@ -39,6 +39,7 @@ services:
       ATTENDANCE_TIME: "09:00"
       RANDOM_DELAY_MAX: "0"
       ATTENDANCE_MODE: fixed
+      TZ: Asia/Shanghai
     volumes:
       - ./data:/data
 ```
@@ -50,6 +51,7 @@ services:
 - `ATTENDANCE_TIME`：每日签到时间，24 小时制 `HH:MM`。
 - `RANDOM_DELAY_MAX`：签到前最大随机延迟秒数，`0` 表示禁用。
 - `ATTENDANCE_MODE`：`fixed` 表示固定 5 鸡腿，`random` 表示随机鸡腿。
+- `TZ`：容器时区，建议设置为 `Asia/Shanghai`。
 
 然后在该目录下输入 `docker compose up -d`
 
