@@ -36,13 +36,15 @@ def load_cookies() -> Optional[list]:
     """Load saved Playwright-format cookies, or None if missing/corrupt."""
     cookies_file = get_cookies_file()
     if not cookies_file.exists():
+        logger.info("No saved cookies at %s", cookies_file)
         return None
     try:
         cookies = json.loads(cookies_file.read_text())
         if cookies:
+            logger.info("Loaded %d saved cookies from %s", len(cookies), cookies_file)
             return cookies
-    except (json.JSONDecodeError, KeyError):
-        pass
+    except (json.JSONDecodeError, KeyError) as e:
+        logger.warning("Saved cookies file is unreadable: %s (%s)", cookies_file, e)
     return None
 
 

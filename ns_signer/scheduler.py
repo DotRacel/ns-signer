@@ -16,6 +16,35 @@ from .attendance import do_attendance
 logger = logging.getLogger("nodeseek")
 
 
+def target_for_date(now: datetime, hour: int, minute: int) -> datetime:
+    """Return today's configured target time."""
+    return now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+
+def should_run_now(
+    now: datetime,
+    hour: int,
+    minute: int,
+    last_run_date,
+    window_seconds: int = 60,
+) -> bool:
+    """Return True only during the window after today's configured target time."""
+    target = target_for_date(now, hour, minute)
+    seconds_after_target = (now - target).total_seconds()
+    return (
+        0 <= seconds_after_target < window_seconds
+        and last_run_date != target.date()
+    )
+
+
+def next_target_after(now: datetime, hour: int, minute: int) -> datetime:
+    """Return the next configured target time, today or tomorrow."""
+    target = target_for_date(now, hour, minute)
+    if now >= target:
+        target += timedelta(days=1)
+    return target
+
+
 def run_scheduler(config: dict):
     """
     Blocking loop -- checks every ~30 s whether it's time for the daily
@@ -39,13 +68,7 @@ def run_scheduler(config: dict):
 
     while True:
         now = datetime.now()
-        target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        if now >= target:
-            target += timedelta(days=1)
-
-        seconds_until = (target - now).total_seconds()
-
-        if 0 <= seconds_until <= 60 and last_date != now.date():
+        if should_run_now(now, hour, minute, last_date):
             if config["random_delay_max"] > 0:
                 delay = random.randint(0, config["random_delay_max"])
                 logger.info("Random delay: %ds", delay)
@@ -63,7 +86,9 @@ def run_scheduler(config: dict):
             else:
                 logger.error("Login failed, skipping today's attendance")
 
-            last_date = now.date()
+            last_date = target_for_date(now, hour, minute).date()
 
+        target = next_target_after(datetime.now(), hour, minute)
+        seconds_until = (target - datetime.now()).total_seconds()
         sleep_for = min(30, max(1, int(seconds_until) - 30)) if seconds_until > 30 else 10
         time.sleep(sleep_for)

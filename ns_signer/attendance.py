@@ -17,6 +17,16 @@ from scrapling.fetchers import DynamicSession
 from playwright.sync_api import Page
 
 logger = logging.getLogger("nodeseek")
+ALREADY_ATTENDED_MARKERS = ("已完成签到", "already checked in", "already completed")
+
+
+def is_attendance_completed(data: dict) -> bool:
+    """Return True when the attendance API says today's work is done."""
+    if data.get("success"):
+        return True
+
+    message = str(data.get("message", "")).lower()
+    return any(marker in message for marker in ALREADY_ATTENDED_MARKERS)
 
 
 def do_attendance(config: dict, cookies: list) -> bool:
@@ -69,13 +79,17 @@ def do_attendance(config: dict, cookies: list) -> bool:
         return False
 
     data = result_container[0]
-    if data.get("success"):
+    if is_attendance_completed(data):
+        if not data.get("success"):
+            logger.info("Check-in already completed: %s", data.get("message", "Done"))
+            return True
+
         logger.info(
             "Check-in OK! %s | Balance: %s chicken legs",
             data.get("message", "Success"),
             data.get("current", "?"),
         )
         return True
-    else:
-        logger.warning("Check-in failed: %s", data.get("message", "Unknown error"))
-        return False
+
+    logger.warning("Check-in failed: %s", data.get("message", "Unknown error"))
+    return False

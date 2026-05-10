@@ -37,7 +37,11 @@ logger = logging.getLogger("nodeseek")
 def main():
     parser = argparse.ArgumentParser(description="Nodeseek Daily Auto Sign-in")
     parser.add_argument("--once", action="store_true", help="Check in once and exit")
-    parser.add_argument("--login", action="store_true", help="Force re-login and exit")
+    parser.add_argument(
+        "--login",
+        action="store_true",
+        help="Force re-login, refresh saved cookies, and exit",
+    )
     args = parser.parse_args()
 
     load_env()

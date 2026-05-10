@@ -68,3 +68,7 @@ docker compose run --rm ns-signer python -m ns_signer.main --once
 ```bash
 docker compose run --rm ns-signer python -m ns_signer.main --login
 ```
+
+注意：`--login` 是强制刷新登录态，不会复用已有 cookies。Docker Compose
+部署时 cookies 保存在宿主机的 `./data/cookies.json`；本地直接运行 Python 时，
+默认保存在项目根目录的 `cookies.json`。
