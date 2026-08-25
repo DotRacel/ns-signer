@@ -40,5 +40,51 @@ class CookieReuseTests(unittest.TestCase):
             login.do_login = original_do_login
 
 
+class RetryBackoffTests(unittest.TestCase):
+    """A burst of sign-in POSTs gets rate-limited, so only those attempts back off."""
+
+    def run_attempts(self, outcomes):
+        """Drive do_login over canned attempt results and return the sleeps it took."""
+        config = {"login_retries": len(outcomes)}
+        slept: list = []
+        calls = iter(outcomes)
+
+        original_attempt = login.do_login_attempt
+        original_save = login.save_cookies
+        original_sleep = login.time.sleep
+        try:
+            login.do_login_attempt = lambda cfg, attempt: next(calls)
+            login.save_cookies = lambda cookies: None
+            login.time.sleep = slept.append
+            return login.do_login(config), slept
+        finally:
+            login.do_login_attempt = original_attempt
+            login.save_cookies = original_save
+            login.time.sleep = original_sleep
+
+    def test_submitted_attempts_back_off_exponentially(self):
+        cookies, slept = self.run_attempts([(None, True)] * 4)
+        self.assertIsNone(cookies)
+        self.assertEqual(slept, [5, 10, 20])
+
+    def test_attempts_that_never_reached_the_api_retry_at_base_delay(self):
+        cookies, slept = self.run_attempts([(None, False)] * 4)
+        self.assertIsNone(cookies)
+        self.assertEqual(slept, [5, 5, 5])
+
+    def test_backoff_only_grows_for_submitted_attempts(self):
+        cookies, slept = self.run_attempts(
+            [(None, True), (None, False), (None, True), (None, True)]
+        )
+        self.assertIsNone(cookies)
+        self.assertEqual(slept, [5, 5, 10])
+
+    def test_successful_attempt_stops_retrying(self):
+        saved = [{"name": "session"}]
+        cookies, slept = self.run_attempts([(saved, True), (None, True)])
+        self.assertIs(cookies, saved)
+        self.assertEqual(slept, [])
+
+
 if __name__ == "__main__":
     unittest.main()
