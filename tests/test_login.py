@@ -1,89 +1,282 @@
-import sys
 import time
-import types
 import unittest
 
-
-fetchers = types.ModuleType("scrapling.fetchers")
-fetchers.DynamicSession = object
-fetchers.StealthySession = object
-scrapling = types.ModuleType("scrapling")
-scrapling.fetchers = fetchers
-sys.modules.setdefault("scrapling", scrapling)
-sys.modules.setdefault("scrapling.fetchers", fetchers)
-
-playwright = types.ModuleType("playwright")
-sync_api = types.ModuleType("playwright.sync_api")
-sync_api.Page = object
-playwright.sync_api = sync_api
-sys.modules.setdefault("playwright", playwright)
-sys.modules.setdefault("playwright.sync_api", sync_api)
+import _stubs  # noqa: F401  (installs the browser-stack stand-ins)
 
 from ns_signer import login
 
 
-class CookieReuseTests(unittest.TestCase):
-    def test_get_valid_cookies_reuses_unexpired_session_cookie(self):
-        saved_cookies = [{"name": "session", "expires": time.time() + 3600}]
-        original_load_cookies = login.load_cookies
-        original_do_login = login.do_login
+class SignInClassificationTests(unittest.TestCase):
+    """`success: true` is not the same as "signed in", and that gap cost a month of check-ins."""
 
-        def fail_if_login_called(config):
-            self.fail("do_login should not be called for a valid saved session cookie")
+    def test_plain_success_is_a_login(self):
+        outcome, _ = login.classify_sign_in({"status": 200, "body": {"success": True}})
+        self.assertEqual(outcome, login.OUTCOME_SUCCESS)
 
-        try:
-            login.load_cookies = lambda: saved_cookies
-            login.do_login = fail_if_login_called
-            self.assertIs(login.get_valid_cookies({}), saved_cookies)
-        finally:
-            login.load_cookies = original_load_cookies
-            login.do_login = original_do_login
-
-
-class RetryBackoffTests(unittest.TestCase):
-    """A burst of sign-in POSTs gets rate-limited, so only those attempts back off."""
-
-    def run_attempts(self, outcomes):
-        """Drive do_login over canned attempt results and return the sleeps it took."""
-        config = {"login_retries": len(outcomes)}
-        slept: list = []
-        calls = iter(outcomes)
-
-        original_attempt = login.do_login_attempt
-        original_save = login.save_cookies
-        original_sleep = login.time.sleep
-        try:
-            login.do_login_attempt = lambda cfg, attempt: next(calls)
-            login.save_cookies = lambda cookies: None
-            login.time.sleep = slept.append
-            return login.do_login(config), slept
-        finally:
-            login.do_login_attempt = original_attempt
-            login.save_cookies = original_save
-            login.time.sleep = original_sleep
-
-    def test_submitted_attempts_back_off_exponentially(self):
-        cookies, slept = self.run_attempts([(None, True)] * 4)
-        self.assertIsNone(cookies)
-        self.assertEqual(slept, [5, 10, 20])
-
-    def test_attempts_that_never_reached_the_api_retry_at_base_delay(self):
-        cookies, slept = self.run_attempts([(None, False)] * 4)
-        self.assertIsNone(cookies)
-        self.assertEqual(slept, [5, 5, 5])
-
-    def test_backoff_only_grows_for_submitted_attempts(self):
-        cookies, slept = self.run_attempts(
-            [(None, True), (None, False), (None, True), (None, True)]
+    def test_success_redirecting_home_is_a_login(self):
+        outcome, _ = login.classify_sign_in(
+            {"status": 200, "body": {"success": True, "redirect": "/"}}
         )
-        self.assertIsNone(cookies)
-        self.assertEqual(slept, [5, 5, 10])
+        self.assertEqual(outcome, login.OUTCOME_SUCCESS)
 
-    def test_successful_attempt_stops_retrying(self):
-        saved = [{"name": "session"}]
-        cookies, slept = self.run_attempts([(saved, True), (None, True)])
-        self.assertIs(cookies, saved)
+    def test_success_redirecting_to_email_verification_is_not_a_login(self):
+        outcome, detail = login.classify_sign_in(
+            {
+                "status": 200,
+                "body": {"success": True, "redirect": "/emailSignIn.html?email=a%40b.c"},
+            }
+        )
+        self.assertEqual(outcome, login.OUTCOME_EMAIL_VERIFICATION)
+        self.assertIn("emailSignIn", detail)
+
+    def test_success_redirecting_to_sms_verification_is_not_a_login(self):
+        outcome, _ = login.classify_sign_in(
+            {"status": 200, "body": {"success": True, "redirect": "/smsSignIn.html"}}
+        )
+        self.assertEqual(outcome, login.OUTCOME_EMAIL_VERIFICATION)
+
+    def test_two_factor_prompt_is_reported_separately(self):
+        outcome, _ = login.classify_sign_in(
+            {"status": 200, "body": {"success": True, "need2FA": True, "otpSession": "x"}}
+        )
+        self.assertEqual(outcome, login.OUTCOME_TWO_FACTOR)
+
+    def test_refusal_carries_the_reason(self):
+        outcome, detail = login.classify_sign_in(
+            {"status": 200, "body": {"success": False, "message": "用户名或密码错误"}}
+        )
+        self.assertEqual(outcome, login.OUTCOME_REFUSED)
+        self.assertEqual(detail, "用户名或密码错误")
+
+    def test_non_json_answer_is_reported_as_blocked(self):
+        outcome, _ = login.classify_sign_in(
+            {"status": 403, "body": None, "raw": "<html>error</html>"}
+        )
+        self.assertEqual(outcome, login.OUTCOME_BLOCKED)
+
+
+class SessionProbeTests(unittest.TestCase):
+    """The probe is a second opinion; it must never be the reason a good login is lost."""
+
+    def test_unauthorized_status_means_signed_out(self):
+        self.assertTrue(login.probe_says_signed_out({"status": 403, "body": None}))
+
+    def test_explicit_failure_body_means_signed_out(self):
+        self.assertTrue(
+            login.probe_says_signed_out({"status": 200, "body": {"success": False}})
+        )
+
+    def test_ordinary_answer_means_signed_in(self):
+        self.assertFalse(
+            login.probe_says_signed_out({"status": 200, "body": {"count": 0}})
+        )
+
+    def test_a_probe_that_moved_is_not_treated_as_signed_out(self):
+        self.assertFalse(
+            login.probe_says_signed_out({"status": 404, "body": None, "raw": "<html>"})
+        )
+
+    def test_a_probe_that_could_not_run_is_not_treated_as_signed_out(self):
+        self.assertFalse(
+            login.probe_says_signed_out({"status": 0, "body": None, "error": "TypeError"})
+        )
+
+
+class RetryPolicyTests(unittest.TestCase):
+    def run_attempts(self, outcomes, retries=None, config=None, saved_tokens=None):
+        """Drive do_login over canned attempt results, returning its answer and sleeps."""
+        config = dict(config or {})
+        config.setdefault("login_retries", retries or len(outcomes))
+        slept: list = []
+        results = iter(
+            {"outcome": o, "detail": "", "cookies": ["c"] if o == login.OUTCOME_SUCCESS else [], "tokens": {}}
+            for o in outcomes
+        )
+        self.modes: list = []
+
+        def next_attempt(cfg, attempt, mode=login.MODE_PASSWORD):
+            self.modes.append(mode)
+            return next(results)
+
+        original = (login.do_login_attempt, login.save_session, login.load_session, login.time.sleep)
+        try:
+            login.do_login_attempt = next_attempt
+            login.save_session = lambda cookies, tokens: None
+            login.load_session = lambda: ([], dict(saved_tokens or {}))
+            login.time.sleep = slept.append
+            cookies, self.outcome = login.login_with_outcome(config)
+            return cookies, slept, len(self.modes)
+        finally:
+            (
+                login.do_login_attempt,
+                login.save_session,
+                login.load_session,
+                login.time.sleep,
+            ) = original
+
+    def test_success_after_turnstile_misses(self):
+        result, slept, attempts = self.run_attempts(
+            [login.OUTCOME_NO_TURNSTILE, login.OUTCOME_NO_TURNSTILE, login.OUTCOME_SUCCESS]
+        )
+        self.assertEqual(result, ["c"])
+        self.assertEqual(attempts, 3)
+        self.assertEqual(len(slept), 2)
+
+    def test_attempts_that_reached_the_api_back_off(self):
+        _, slept, _ = self.run_attempts(
+            [login.OUTCOME_UNVERIFIED, login.OUTCOME_UNVERIFIED, login.OUTCOME_UNVERIFIED]
+        )
+        self.assertEqual(slept, [login.RETRY_BASE_DELAY, login.RETRY_BASE_DELAY * 2])
+
+    def test_bad_credentials_stop_immediately(self):
+        result, slept, attempts = self.run_attempts(
+            [login.OUTCOME_REFUSED] * 10, retries=10
+        )
+        self.assertIsNone(result)
+        self.assertEqual(attempts, 1)
         self.assertEqual(slept, [])
+
+    def test_email_verification_stops_after_confirming_it(self):
+        result, _, attempts = self.run_attempts(
+            [login.OUTCOME_EMAIL_VERIFICATION] * 10, retries=10
+        )
+        self.assertIsNone(result)
+        self.assertEqual(attempts, 2)
+
+    def test_turnstile_misses_use_the_whole_budget(self):
+        result, _, attempts = self.run_attempts([login.OUTCOME_NO_TURNSTILE] * 6, retries=6)
+        self.assertIsNone(result)
+        self.assertEqual(attempts, 6)
+
+
+MAILBOX = {
+    "email_address": "someone@example.com",
+    "imap_host": "imap.example.com",
+    "imap_username": "someone@example.com",
+    "imap_password": "secret",
+}
+
+
+class LoginRouteTests(unittest.TestCase):
+    """A device NodeSeek has never seen cannot get in on a password, whatever it is."""
+
+    def test_without_a_mailbox_the_password_route_is_all_there_is(self):
+        self.assertEqual(login.initial_login_mode({}, {}), login.MODE_PASSWORD)
+
+    def test_an_unknown_device_goes_straight_to_the_email_route(self):
+        self.assertEqual(login.initial_login_mode(MAILBOX, {}), login.MODE_EMAIL)
+
+    def test_a_device_with_a_security_token_tries_the_password_route(self):
+        self.assertEqual(
+            login.initial_login_mode(MAILBOX, {"security_token": "abc"}), login.MODE_PASSWORD
+        )
+
+
+class RouteSwitchTests(RetryPolicyTests):
+    """Being told "verify by e-mail" is a routing instruction, not a dead end."""
+
+    def test_email_verification_reroutes_the_next_attempt(self):
+        # A saved security token means the device was known once, so the password
+        # route is tried first; being turned away reroutes the rest of the login.
+        result, _, _ = self.run_attempts(
+            [login.OUTCOME_EMAIL_VERIFICATION, login.OUTCOME_SUCCESS],
+            config=MAILBOX,
+            saved_tokens={"security_token": "abc"},
+        )
+        self.assertEqual(result, ["c"])
+        self.assertEqual(self.modes, [login.MODE_PASSWORD, login.MODE_EMAIL])
+
+    def test_rerouting_buys_the_email_route_a_turn(self):
+        # Without clearing the count, the password route's refusal plus one more
+        # would end the login before the e-mail route had been tried at all.
+        outcomes = [
+            login.OUTCOME_EMAIL_VERIFICATION,
+            login.OUTCOME_NO_TURNSTILE,
+            login.OUTCOME_SUCCESS,
+        ]
+        result, _, attempts = self.run_attempts(
+            outcomes, retries=5, config=MAILBOX, saved_tokens={"security_token": "abc"}
+        )
+        self.assertEqual(result, ["c"])
+        self.assertEqual(attempts, 3)
+        self.assertEqual(self.modes[1:], [login.MODE_EMAIL, login.MODE_EMAIL])
+
+    def test_a_dead_end_still_ends(self):
+        # If even the e-mail route is told to go and verify by e-mail there is
+        # nothing left to try, so the login stops rather than looping.
+        result, _, attempts = self.run_attempts(
+            [login.OUTCOME_EMAIL_VERIFICATION] * 6, retries=6, config=MAILBOX
+        )
+        self.assertIsNone(result)
+        self.assertEqual(attempts, 2)
+
+    def test_without_a_mailbox_it_still_gives_up_after_confirming_the_refusal(self):
+        result, _, attempts = self.run_attempts(
+            [login.OUTCOME_EMAIL_VERIFICATION] * 10, retries=10
+        )
+        self.assertIsNone(result)
+        self.assertEqual(attempts, 2)
+
+
+class SessionReuseTests(unittest.TestCase):
+    def test_valid_saved_session_is_reused_without_logging_in(self):
+        saved = ([{"name": "session", "expires": time.time() + 86400}], {"security_token": "t"})
+        original = (login.load_session, login.login_with_outcome)
+        try:
+            login.load_session = lambda: saved
+            login.login_with_outcome = lambda config: self.fail("should not log in for a live session")
+            cookies, tokens, outcome = login.get_valid_session({})
+            self.assertEqual((cookies, tokens), saved)
+            self.assertEqual(outcome, login.OUTCOME_SUCCESS)
+        finally:
+            login.load_session, login.login_with_outcome = original
+
+    def test_expired_saved_session_triggers_a_login(self):
+        expired = [{"name": "session", "expires": time.time() - 10}]
+        calls = []
+        original = (login.load_session, login.login_with_outcome)
+        try:
+            login.load_session = lambda: (expired, {})
+            login.login_with_outcome = (
+                lambda config: calls.append(config) or (None, login.OUTCOME_NO_TURNSTILE)
+            )
+            cookies, _, outcome = login.get_valid_session({})
+            self.assertIsNone(cookies)
+            self.assertEqual(outcome, login.OUTCOME_NO_TURNSTILE)
+            self.assertEqual(len(calls), 1)
+        finally:
+            login.load_session, login.login_with_outcome = original
+
+    def test_a_failed_login_reports_why_so_the_caller_can_stop(self):
+        expired = [{"name": "session", "expires": time.time() - 10}]
+        original = (login.load_session, login.login_with_outcome)
+        try:
+            login.load_session = lambda: (expired, {})
+            login.login_with_outcome = lambda config: (None, login.OUTCOME_EMAIL_VERIFICATION)
+            _, _, outcome = login.get_valid_session({})
+            self.assertIn(outcome, login.BLOCKING_OUTCOMES)
+        finally:
+            login.load_session, login.login_with_outcome = original
+
+
+class ProactiveRenewalTests(unittest.TestCase):
+    def renew(self, seconds_left):
+        cookies = [{"name": "session", "expires": time.time() + seconds_left}]
+        calls = []
+        original = (login.load_session, login.login_with_outcome)
+        try:
+            login.load_session = lambda: (cookies, {})
+            login.login_with_outcome = lambda config: (calls.append(1) or ["c"], login.OUTCOME_SUCCESS)
+            ok = login.refresh_session_if_stale({"session_renew_days": 7})
+            return ok, len(calls)
+        finally:
+            login.load_session, login.login_with_outcome = original
+
+    def test_session_with_room_to_spare_is_left_alone(self):
+        self.assertEqual(self.renew(20 * 86400), (True, 0))
+
+    def test_session_close_to_expiry_is_renewed_early(self):
+        self.assertEqual(self.renew(3 * 86400), (True, 1))
 
 
 if __name__ == "__main__":

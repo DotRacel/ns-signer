@@ -1,24 +1,8 @@
-import sys
-import types
 import unittest
 
+import _stubs  # noqa: F401  (installs the browser-stack stand-ins)
 
-fetchers = types.ModuleType("scrapling.fetchers")
-fetchers.DynamicSession = object
-fetchers.StealthySession = object
-scrapling = types.ModuleType("scrapling")
-scrapling.fetchers = fetchers
-sys.modules.setdefault("scrapling", scrapling)
-sys.modules.setdefault("scrapling.fetchers", fetchers)
-
-playwright = types.ModuleType("playwright")
-sync_api = types.ModuleType("playwright.sync_api")
-sync_api.Page = object
-playwright.sync_api = sync_api
-sys.modules.setdefault("playwright", playwright)
-sys.modules.setdefault("playwright.sync_api", sync_api)
-
-from ns_signer.attendance import is_attendance_completed
+from ns_signer.attendance import is_attendance_completed, is_session_expired
 
 
 class AttendanceResponseTests(unittest.TestCase):
@@ -31,8 +15,28 @@ class AttendanceResponseTests(unittest.TestCase):
 
     def test_unknown_failure_is_not_completed(self):
         self.assertFalse(
-            is_attendance_completed({"success": False, "message": "未登录或会话过期"})
+            is_attendance_completed({"success": False, "message": "服务器开小差了"})
         )
+
+
+class SessionExpiryTests(unittest.TestCase):
+    """A dead session and a failed check-in need different answers, so they are told apart."""
+
+    def test_unauthorized_status_means_the_session_is_gone(self):
+        self.assertTrue(is_session_expired({"status": 403, "body": None}))
+
+    def test_not_logged_in_message_means_the_session_is_gone(self):
+        self.assertTrue(
+            is_session_expired({"status": 200, "body": {"success": False, "message": "未登录"}})
+        )
+
+    def test_ordinary_failure_does_not_look_like_an_expired_session(self):
+        self.assertFalse(
+            is_session_expired({"status": 200, "body": {"success": False, "message": "服务器开小差了"}})
+        )
+
+    def test_a_successful_check_in_is_never_an_expired_session(self):
+        self.assertFalse(is_session_expired({"status": 200, "body": {"success": True}}))
 
 
 if __name__ == "__main__":

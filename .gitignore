@@ -1,6 +1,8 @@
 # Credentials and secrets
 .env
 cookies.json
+session.json
+browser-profile/
 
 # Logs
 *.log
@@ -9,6 +11,9 @@ cookies.json
 __pycache__/
 *.pyc
 .venv/
+
+# Throwaway diagnostics
+dev/
 
 # macOS
 .DS_Store
