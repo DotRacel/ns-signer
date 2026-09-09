@@ -96,6 +96,18 @@ docker compose run --rm ns-signer python -m ns_signer.main --status
 重新登录。Docker Compose 部署时登录态保存在宿主机的 `./data/session.json`；本地
 直接运行 Python 时，默认保存在项目根目录的 `session.json`。
 
+用邮箱验证码完成一次登录（不需要本机拿到 Turnstile token）：
+
+```bash
+# 1. 在任意浏览器打开 https://www.nodeseek.com/emailSignIn.html，填入邮箱，点「发送验证码」
+# 2. 从邮箱里拿到 6 位验证码，然后：
+docker compose run --rm ns-signer python -m ns_signer.main --login-code 123456
+```
+
+「请求验证码」才需要 Turnstile，「用验证码登录」不需要。所以在本机拿不到 token 时，
+这条路依然走得通，而且走完会拿到 `security_token`——这台设备从此被 NodeSeek 记住，
+以后就能直接用密码登录了。需要先设置 `EMAIL_ADDRESS`，或用 `--email` 指定。
+
 从浏览器导入一份现成的登录态：
 
 ```bash

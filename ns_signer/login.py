@@ -371,6 +371,78 @@ def do_login_attempt(config: dict, attempt: int, mode: str = MODE_PASSWORD) -> d
     return result
 
 
+def login_with_code(config: dict, code: str, address: str = "") -> Optional[list]:
+    """
+    Finish a sign-in with a code somebody else asked NodeSeek to send.
+
+    Asking for the code is the only part of the e-mail route that needs a
+    Turnstile token; handing the code back needs none. So when Cloudflare will not
+    give this machine a token -- which is most of the time -- a person can press
+    "send code" in their own browser and pass on the six digits, and the login
+    still completes here. That matters beyond the one login: it ends with the
+    security token that makes this device recognised, which is what lets later
+    logins go through on the password alone.
+
+    Returns the cookies on success, None on failure.
+    """
+    address = address or config.get("email_address", "")
+    if not address:
+        logger.error(
+            "No e-mail address to sign in with. Set EMAIL_ADDRESS to the address "
+            "NodeSeek sends the code to."
+        )
+        return None
+
+    result = {"outcome": OUTCOME_ERROR, "detail": "", "cookies": [], "tokens": {}}
+
+    def page_action(page: Page):
+        try:
+            run(page)
+        except Exception as e:
+            result["outcome"] = OUTCOME_ERROR
+            result["detail"] = f"{type(e).__name__}: {e}".split("\nCall log")[0][:200]
+
+    def run(page: Page):
+        try:
+            page.wait_for_selector(EMAIL_SELECTOR, timeout=20000)
+        except Exception:
+            result["outcome"] = OUTCOME_NO_PAGE
+            result["detail"] = "the sign-in form never loaded (the edge likely refused the page)"
+            return
+
+        browser.wait_for_fog_cookie(page)
+        _, saved_tokens = load_session()
+        browser.restore_tokens(page, saved_tokens)
+
+        logger.info("Signing in as %s with the code provided...", address)
+        response = browser.api_call(
+            page,
+            "POST",
+            EMAIL_SIGN_IN_API,
+            {"email": address, "code": code},
+            browser.protocol_headers(page),
+        )
+        browser.absorb_response_tokens(page, response.get("headers") or {})
+
+        result["outcome"], result["detail"] = classify_sign_in(response)
+        if result["outcome"] == OUTCOME_SUCCESS:
+            finish_session(page, result)
+
+    try:
+        with browser.open_session(config, keep_profile=False) as session:
+            session.fetch(EMAIL_SIGN_IN_URL, page_action=page_action)
+    except Exception as e:
+        logger.error("Login session error: %s", e)
+        result["detail"] = str(e)
+
+    log_outcome(result["outcome"], result["detail"])
+    if result["outcome"] != OUTCOME_SUCCESS:
+        return None
+
+    save_session(result["cookies"], result["tokens"])
+    return result["cookies"]
+
+
 def initial_login_mode(config: dict, tokens: dict) -> str:
     """
     Pick the route a login should take.

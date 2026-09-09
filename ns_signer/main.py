@@ -8,6 +8,7 @@ Usage:
   python -m ns_signer.main --login       # Force re-login and exit
   python -m ns_signer.main --status      # Report on the saved session and exit
   python -m ns_signer.main --import-session cookies.json   # Adopt a browser session
+  python -m ns_signer.main --login-code 123456   # Finish a login with a mailed code
 """
 
 import sys
@@ -16,7 +17,12 @@ import logging
 import argparse
 
 from .config import get_data_dir, load_env, get_config
-from .login import do_login, refresh_session_if_stale, verify_saved_session
+from .login import (
+    do_login,
+    login_with_code,
+    refresh_session_if_stale,
+    verify_saved_session,
+)
 from .session_store import load_session, describe_session, import_session
 from .scheduler import DONE, run_scheduler, run_attendance_cycle
 
@@ -54,6 +60,20 @@ def main():
         "--status",
         action="store_true",
         help="Report what the saved session looks like and exit",
+    )
+    parser.add_argument(
+        "--login-code",
+        metavar="CODE",
+        help=(
+            "Finish a login with a code NodeSeek mailed out. Asking for the code needs "
+            "a Turnstile token, but using it does not -- so press 'send code' on "
+            "nodeseek.com/emailSignIn.html in any browser and pass the digits here"
+        ),
+    )
+    parser.add_argument(
+        "--email",
+        metavar="ADDRESS",
+        help="Address the login code was sent to (defaults to EMAIL_ADDRESS)",
     )
     parser.add_argument(
         "--check",
@@ -95,6 +115,9 @@ def main():
             describe_session(cookies),
         )
         sys.exit(0 if verify_saved_session(config) else 1)
+
+    if args.login_code:
+        sys.exit(0 if login_with_code(config, args.login_code.strip(), args.email or "") else 1)
 
     if args.check:
         sys.exit(0 if verify_saved_session(config) else 1)
