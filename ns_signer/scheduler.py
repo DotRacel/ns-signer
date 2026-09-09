@@ -79,6 +79,21 @@ def retry_window_open(now: datetime, target: datetime, retry_hours: float) -> bo
     return now < target + timedelta(hours=retry_hours)
 
 
+def should_pick_up_missed_check_in(
+    now: datetime, target: datetime, completed_date, renewed: bool, retry_hours: float
+) -> bool:
+    """
+    True when a just-renewed session should rescue a check-in given up on earlier.
+
+    The two jobs run on different clocks, and the fragile one runs later: a
+    check-in abandoned at midnight for want of a session should not stay abandoned
+    once the afternoon session check has produced one.
+    """
+    if not renewed or completed_date == target.date():
+        return False
+    return target <= now < target + timedelta(hours=retry_hours)
+
+
 def persist_refreshed_session(cookies: list, tokens: dict) -> None:
     """
     Save cookies and tokens back, but never trade a working session for a dead one.
@@ -93,18 +108,42 @@ def persist_refreshed_session(cookies: list, tokens: dict) -> None:
     save_session(cookies, tokens)
 
 
+def report_failed_login(outcome: str) -> str:
+    """
+    Explain a failed login and end the day's check-in.
+
+    Retrying is what the check-in loop is for, but not this: a login has already
+    spent its whole retry budget by the time it returns, so starting another one
+    twenty minutes later would only repeat the same odds at ten times the cost --
+    and a burst of browser launches makes Cloudflare less willing to hand over the
+    Turnstile token the next login needs. The daily session check is the second
+    chance; there is no point taking sixty.
+    """
+    if outcome in BLOCKING_OUTCOMES:
+        logger.error(
+            "Login cannot succeed without someone stepping in (%s); no more "
+            "attempts today",
+            outcome,
+        )
+    else:
+        logger.error(
+            "A full round of login attempts got no session (%s); waiting for the "
+            "next daily session check rather than starting over",
+            outcome,
+        )
+    return BLOCKED
+
+
 def run_attendance_cycle(config: dict) -> str:
     """
     Check in once, logging in again if the saved session turns out to be dead.
 
-    Returns DONE, RETRY, or BLOCKED. The last one matters: retrying every twenty
-    minutes around a login that needs a person would mean hundreds of pointless
-    browser launches overnight, so the day is stopped instead.
+    Returns DONE, RETRY, or BLOCKED. Only a check-in that failed with a session in
+    hand is worth coming back to in twenty minutes; a failed login is not.
     """
     cookies, tokens, login_outcome = get_valid_session(config)
     if not cookies:
-        logger.error("No usable session, cannot check in")
-        return BLOCKED if login_outcome in BLOCKING_OUTCOMES else RETRY
+        return report_failed_login(login_outcome)
 
     result = do_attendance(config, cookies, tokens)
     persist_refreshed_session(result["cookies"], result["tokens"])
@@ -117,7 +156,7 @@ def run_attendance_cycle(config: dict) -> str:
     logger.info("NodeSeek rejected the session, logging in again...")
     fresh, login_outcome = login_with_outcome(config)
     if not fresh:
-        return BLOCKED if login_outcome in BLOCKING_OUTCOMES else RETRY
+        return report_failed_login(login_outcome)
 
     cookies, tokens = load_session()
     result = do_attendance(config, cookies, tokens)
@@ -152,6 +191,7 @@ def run_scheduler(config: dict):
 
     last_attendance_date = None
     last_session_check_date = None
+    completed_date = None
     pending_target = None
     next_attempt_at = None
 
@@ -161,8 +201,18 @@ def run_scheduler(config: dict):
         if should_run_now(now, session_hour, session_minute, last_session_check_date):
             last_session_check_date = target_for_date(now, session_hour, session_minute).date()
             logger.info("Daily session check...")
-            refresh_session_if_stale(config)
+            renewed = refresh_session_if_stale(config)
             now = datetime.now()
+            # A renewal that worked is also the day's second chance: the check-in
+            # may have been abandoned this morning for want of the very session
+            # that now exists.
+            missed = target_for_date(now, attendance_hour, attendance_minute)
+            if should_pick_up_missed_check_in(
+                now, missed, completed_date, renewed, config["attendance_retry_hours"]
+            ):
+                logger.info("Session is usable again; picking up today's missed check-in")
+                pending_target = missed
+                next_attempt_at = now
 
         if should_run_now(now, attendance_hour, attendance_minute, last_attendance_date):
             target = target_for_date(now, attendance_hour, attendance_minute)
@@ -178,11 +228,11 @@ def run_scheduler(config: dict):
             status = run_attendance_cycle(config)
             if status == DONE:
                 logger.info("Check-in for %s is done", pending_target.date())
+                completed_date = pending_target.date()
                 pending_target = None
             elif status == BLOCKED:
-                logger.error(
-                    "Check-in for %s cannot proceed until the login is sorted out; "
-                    "not retrying today",
+                logger.info(
+                    "Check-in for %s is on hold until there is a usable session",
                     pending_target.date(),
                 )
                 pending_target = None

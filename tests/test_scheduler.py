@@ -90,11 +90,13 @@ class AttendanceCycleTests(unittest.TestCase):
         self.assertEqual(status, scheduler.BLOCKED)
         self.assertEqual(calls["attendance"], 0)
 
-    def test_a_login_that_merely_had_bad_luck_is_worth_retrying(self):
+    def test_a_failed_login_ends_the_day_rather_than_starting_over(self):
+        # The login already spent its whole retry budget; another round twenty
+        # minutes later would repeat the same odds at ten times the cost.
         status, _ = self.cycle(session=None, login_outcome="no-turnstile")
-        self.assertEqual(status, scheduler.RETRY)
+        self.assertEqual(status, scheduler.BLOCKED)
 
-    def test_an_ordinary_check_in_failure_is_worth_retrying(self):
+    def test_only_a_check_in_with_a_session_in_hand_is_retried(self):
         status, calls = self.cycle(session=[{"name": "session"}])
         self.assertEqual(status, scheduler.RETRY)
         self.assertEqual(calls["logins"], 0)
@@ -107,6 +109,34 @@ class AttendanceCycleTests(unittest.TestCase):
         )
         self.assertEqual(status, scheduler.BLOCKED)
         self.assertEqual(calls["logins"], 1)
+
+
+class MissedCheckInTests(unittest.TestCase):
+    """A session that arrives in the afternoon should still rescue the morning."""
+
+    TARGET = datetime(2026, 5, 10, 0, 0, 0)
+
+    def pick_up(self, now, completed_date=None, renewed=True, retry_hours=20):
+        return scheduler.should_pick_up_missed_check_in(
+            now, self.TARGET, completed_date, renewed, retry_hours
+        )
+
+    def test_picks_up_a_check_in_abandoned_this_morning(self):
+        self.assertTrue(self.pick_up(datetime(2026, 5, 10, 13, 20)))
+
+    def test_does_nothing_when_the_check_in_already_happened(self):
+        self.assertFalse(
+            self.pick_up(datetime(2026, 5, 10, 13, 20), completed_date=self.TARGET.date())
+        )
+
+    def test_does_nothing_when_the_session_was_not_renewed(self):
+        self.assertFalse(self.pick_up(datetime(2026, 5, 10, 13, 20), renewed=False))
+
+    def test_does_nothing_once_the_day_is_gone(self):
+        self.assertFalse(self.pick_up(datetime(2026, 5, 10, 21, 0)))
+
+    def test_does_nothing_before_the_check_in_was_even_due(self):
+        self.assertFalse(self.pick_up(datetime(2026, 5, 9, 23, 0)))
 
 
 class SleepTests(unittest.TestCase):
