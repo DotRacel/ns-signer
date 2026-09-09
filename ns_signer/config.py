@@ -75,6 +75,7 @@ def get_config() -> dict:
         # on the cause rather than retrying around it.
         "proxy": os.environ.get("PROXY", "").strip(),
         "login_block_days": float(os.environ.get("LOGIN_BLOCK_DAYS", "7")),
+        "login_attempt_gap": float(os.environ.get("LOGIN_ATTEMPT_GAP", "120")),
         # A check-in that missed its slot is still worth having, so the day keeps
         # being retried instead of being written off at the first failure.
         "attendance_retry_minutes": int(os.environ.get("ATTENDANCE_RETRY_MINUTES", "20")),

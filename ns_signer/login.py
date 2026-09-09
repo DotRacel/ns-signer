@@ -69,6 +69,14 @@ SESSION_COOKIE_WAIT_SECONDS = 15
 RETRY_BASE_DELAY = 5
 RETRY_MAX_DELAY = 300
 
+# Most attempts never reach the API -- they end because Turnstile withheld a
+# token -- and those are the ones worth pacing. Retrying assumes each launch is an
+# independent draw, and a burst breaks that assumption: running seventy launches
+# from one address in an afternoon took its token rate from about one in ten to
+# none at all, measured. Logging in now happens at a quiet hour days before the
+# session runs out, so it can afford to take its time.
+ATTEMPT_GAP_SECONDS = 120
+
 OUTCOME_SUCCESS = "success"
 OUTCOME_NO_PAGE = "no-page"
 OUTCOME_NO_TURNSTILE = "no-turnstile"
@@ -575,7 +583,8 @@ def login_with_outcome(config: dict, force: bool = False) -> tuple[Optional[list
             wait = delay
             delay = min(delay * 2, RETRY_MAX_DELAY)
         else:
-            wait = RETRY_BASE_DELAY + random.uniform(0, RETRY_BASE_DELAY)
+            gap = config.get("login_attempt_gap", ATTEMPT_GAP_SECONDS)
+            wait = random.uniform(gap * 0.6, gap * 1.4)
         logger.info("Retrying login in %.0f seconds...", wait)
         time.sleep(wait)
 

@@ -141,6 +141,17 @@ class RetryPolicyTests(LoginDriver, unittest.TestCase):
         )
         self.assertEqual(slept, [login.RETRY_BASE_DELAY, login.RETRY_BASE_DELAY * 2])
 
+    def test_turnstile_misses_are_paced_apart(self):
+        # A burst of launches is what took this address's token rate to zero, and
+        # retrying is pointless unless each launch is an independent draw.
+        _, slept, _ = self.run_attempts(
+            [login.OUTCOME_NO_TURNSTILE] * 3, config={"login_attempt_gap": 100}
+        )
+        self.assertEqual(len(slept), 2)
+        for wait in slept:
+            self.assertGreaterEqual(wait, 60)
+            self.assertLessEqual(wait, 140)
+
     def test_bad_credentials_stop_immediately(self):
         result, slept, attempts = self.run_attempts(
             [login.OUTCOME_REFUSED] * 10, retries=10
