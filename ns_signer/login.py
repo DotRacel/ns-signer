@@ -492,9 +492,9 @@ def log_outcome(outcome: str, detail: str) -> None:
         logger.error("Login attempt failed: %s", detail)
 
 
-def do_login(config: dict) -> Optional[list]:
+def do_login(config: dict, force: bool = False) -> Optional[list]:
     """Log in and persist the resulting session, returning the cookies or None."""
-    return login_with_outcome(config)[0]
+    return login_with_outcome(config, force=force)[0]
 
 
 def blocked_reason(config: dict) -> str:
@@ -516,7 +516,7 @@ def blocked_reason(config: dict) -> str:
     return str(blocked.get("reason") or "a previous login was refused")
 
 
-def login_with_outcome(config: dict) -> tuple[Optional[list], str]:
+def login_with_outcome(config: dict, force: bool = False) -> tuple[Optional[list], str]:
     """
     Log in and persist the resulting session, reporting how it ended.
 
@@ -524,8 +524,12 @@ def login_with_outcome(config: dict) -> tuple[Optional[list], str]:
     settled it so the caller can tell "try again later" from "this will not work
     until somebody changes something". Outcomes of the second kind stop the loop
     early instead of burning every retry.
+
+    `force` ignores a recorded refusal. Scheduled work should leave it alone --
+    that record is what stops twenty browser launches a day going nowhere -- but
+    somebody who types the command has said what they want.
     """
-    skip = blocked_reason(config)
+    skip = "" if force else blocked_reason(config)
     if skip:
         logger.error(
             "Not attempting a login: %s. Confirming that again would cost about "

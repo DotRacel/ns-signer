@@ -133,7 +133,7 @@ def main():
         return
 
     if args.login:
-        sys.exit(0 if do_login(config) else 1)
+        sys.exit(0 if do_login(config, force=True) else 1)
 
     if args.renew:
         sys.exit(0 if refresh_session_if_stale(config) else 1)

@@ -86,7 +86,7 @@ class LoginDriver:
     """Drives do_login over canned attempt results."""
 
     def run_attempts(self, outcomes, retries=None, config=None, saved_tokens=None,
-                     recorded_block=None):
+                     recorded_block=None, force=False):
         """Drive do_login over canned attempt results, returning its answer and sleeps."""
         config = dict(config or {})
         config.setdefault("login_retries", retries or len(outcomes))
@@ -111,7 +111,7 @@ class LoginDriver:
             login.login_block = lambda days: recorded_block
             login.mark_login_blocked = self.blocks.append
             login.time.sleep = slept.append
-            cookies, self.outcome = login.login_with_outcome(config)
+            cookies, self.outcome = login.login_with_outcome(config, force=force)
             return cookies, slept, len(self.modes)
         finally:
             (
@@ -259,6 +259,14 @@ class LoginBlockTests(LoginDriver, unittest.TestCase):
         result, _, attempts = self.run_attempts(
             [login.OUTCOME_SUCCESS], retries=4,
             saved_tokens={"security_token": "abc"},
+            recorded_block={"at": 0, "reason": "email-verification"},
+        )
+        self.assertEqual(result, ["c"])
+        self.assertEqual(attempts, 1)
+
+    def test_an_explicit_command_pushes_past_a_recorded_block(self):
+        result, _, attempts = self.run_attempts(
+            [login.OUTCOME_SUCCESS], retries=4, force=True,
             recorded_block={"at": 0, "reason": "email-verification"},
         )
         self.assertEqual(result, ["c"])
