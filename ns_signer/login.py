@@ -88,13 +88,15 @@ OUTCOME_UNVERIFIED = "unverified"
 OUTCOME_NO_CODE = "no-code"
 OUTCOME_ERROR = "error"
 
-# Outcomes the account itself has to change for, and which therefore only get
-# repeated often enough to rule out a fluke. Retrying past that just burns
-# browser launches and pushes the account further into NodeSeek's rate limiter.
+# Outcomes the account itself has to change for. One is enough to know: these are
+# policy answers from the server, not flaky ones, and a token to ask the question
+# with turns up on roughly one browser launch in ten -- so waiting to see the same
+# answer twice in one round would mean never concluding anything, and hammering
+# the address daily forever. An explicit --login still pushes past the record.
 ATTEMPT_LIMITS = {
     OUTCOME_REFUSED: 1,
     OUTCOME_TWO_FACTOR: 1,
-    OUTCOME_EMAIL_VERIFICATION: 2,
+    OUTCOME_EMAIL_VERIFICATION: 1,
     OUTCOME_NO_CODE: 2,
 }
 
@@ -563,18 +565,29 @@ def login_with_outcome(config: dict, force: bool = False) -> tuple[Optional[list
             save_session(result["cookies"], result["tokens"])
             return result["cookies"], OUTCOME_SUCCESS
 
-        if outcome == OUTCOME_EMAIL_VERIFICATION and mode == MODE_PASSWORD:
-            if email_code.is_configured(config) and config.get("email_address"):
-                logger.info("Switching to the e-mail code route for the rest of this login")
-                mode = MODE_EMAIL
-                seen.pop(OUTCOME_EMAIL_VERIFICATION, None)
-
-        seen[outcome] = seen.get(outcome, 0) + 1
-        if seen[outcome] >= ATTEMPT_LIMITS.get(outcome, config["login_retries"] + 1):
-            logger.error("Giving up after %d %s outcome(s); retrying cannot fix it", seen[outcome], outcome)
-            if outcome in BLOCKING_OUTCOMES:
-                mark_login_blocked(f"{outcome} ({detail})" if detail else outcome)
-            return None, outcome
+        rerouted = (
+            outcome == OUTCOME_EMAIL_VERIFICATION
+            and mode == MODE_PASSWORD
+            and email_code.is_configured(config)
+            and config.get("email_address")
+        )
+        if rerouted:
+            # Being told to verify by e-mail is a routing instruction when there is
+            # a mailbox to read, so it is not held against the login.
+            logger.info("Switching to the e-mail code route for the rest of this login")
+            mode = MODE_EMAIL
+            seen.pop(OUTCOME_EMAIL_VERIFICATION, None)
+        else:
+            seen[outcome] = seen.get(outcome, 0) + 1
+            if seen[outcome] >= ATTEMPT_LIMITS.get(outcome, config["login_retries"] + 1):
+                logger.error(
+                    "Giving up after %d %s outcome(s); retrying cannot fix it",
+                    seen[outcome],
+                    outcome,
+                )
+                if outcome in BLOCKING_OUTCOMES:
+                    mark_login_blocked(f"{outcome} ({detail})" if detail else outcome)
+                return None, outcome
 
         if attempt >= config["login_retries"]:
             break

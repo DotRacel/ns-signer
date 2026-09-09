@@ -160,12 +160,14 @@ class RetryPolicyTests(LoginDriver, unittest.TestCase):
         self.assertEqual(attempts, 1)
         self.assertEqual(slept, [])
 
-    def test_email_verification_stops_after_confirming_it(self):
+    def test_email_verification_stops_at_once(self):
+        # A token to ask the question with turns up on about one launch in ten, so
+        # waiting for a second identical answer would mean never concluding.
         result, _, attempts = self.run_attempts(
             [login.OUTCOME_EMAIL_VERIFICATION] * 10, retries=10
         )
         self.assertIsNone(result)
-        self.assertEqual(attempts, 2)
+        self.assertEqual(attempts, 1)
 
     def test_turnstile_misses_use_the_whole_budget(self):
         result, _, attempts = self.run_attempts([login.OUTCOME_NO_TURNSTILE] * 6, retries=6)
@@ -226,29 +228,48 @@ class RouteSwitchTests(LoginDriver, unittest.TestCase):
         self.assertEqual(self.modes[1:], [login.MODE_EMAIL, login.MODE_EMAIL])
 
     def test_a_dead_end_still_ends(self):
-        # If even the e-mail route is told to go and verify by e-mail there is
-        # nothing left to try, so the login stops rather than looping.
+        # A saved security token starts this on the password route; the refusal
+        # reroutes it, and being refused on the e-mail route too leaves nothing
+        # left to try, so the login stops rather than looping.
+        result, _, attempts = self.run_attempts(
+            [login.OUTCOME_EMAIL_VERIFICATION] * 6, retries=6, config=MAILBOX,
+            saved_tokens={"security_token": "abc"},
+        )
+        self.assertIsNone(result)
+        self.assertEqual(attempts, 2)
+        self.assertEqual(self.modes, [login.MODE_PASSWORD, login.MODE_EMAIL])
+
+    def test_an_unknown_device_with_a_mailbox_starts_on_the_email_route(self):
         result, _, attempts = self.run_attempts(
             [login.OUTCOME_EMAIL_VERIFICATION] * 6, retries=6, config=MAILBOX
         )
         self.assertIsNone(result)
-        self.assertEqual(attempts, 2)
+        self.assertEqual(attempts, 1)
+        self.assertEqual(self.modes, [login.MODE_EMAIL])
 
-    def test_without_a_mailbox_it_still_gives_up_after_confirming_the_refusal(self):
+    def test_without_a_mailbox_it_gives_up_on_the_first_refusal(self):
         result, _, attempts = self.run_attempts(
             [login.OUTCOME_EMAIL_VERIFICATION] * 10, retries=10
         )
         self.assertIsNone(result)
-        self.assertEqual(attempts, 2)
+        self.assertEqual(attempts, 1)
 
 
 class LoginBlockTests(LoginDriver, unittest.TestCase):
     """Confirming a refusal costs ~20 browser launches, so it is not re-confirmed daily."""
 
-    def test_a_confirmed_refusal_is_recorded(self):
+    def test_an_observed_refusal_is_recorded(self):
         self.run_attempts([login.OUTCOME_EMAIL_VERIFICATION] * 4, retries=4)
         self.assertEqual(len(self.blocks), 1)
         self.assertIn("email-verification", self.blocks[0])
+
+    def test_a_reroute_is_not_recorded_as_a_block(self):
+        # With a mailbox the same answer means "use the other route", not "give up".
+        self.run_attempts(
+            [login.OUTCOME_EMAIL_VERIFICATION, login.OUTCOME_SUCCESS],
+            retries=4, config=MAILBOX, saved_tokens={"security_token": "abc"},
+        )
+        self.assertEqual(self.blocks, [])
 
     def test_a_recorded_block_stops_the_login_before_any_browser_starts(self):
         result, _, attempts = self.run_attempts(
