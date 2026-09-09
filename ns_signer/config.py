@@ -70,6 +70,11 @@ def get_config() -> dict:
         "login_retries": int(os.environ.get("LOGIN_RETRIES", "15")),
         "solve_cloudflare": os.environ.get("SOLVE_CLOUDFLARE", "true").lower() == "true",
         "browser_profile_dir": get_browser_profile_dir(),
+        # Whether Turnstile hands over a token depends mostly on where the request
+        # comes from, so routing the browser elsewhere is the one lever that acts
+        # on the cause rather than retrying around it.
+        "proxy": os.environ.get("PROXY", "").strip(),
+        "login_block_days": float(os.environ.get("LOGIN_BLOCK_DAYS", "7")),
         # A check-in that missed its slot is still worth having, so the day keeps
         # being retried instead of being written off at the first failure.
         "attendance_retry_minutes": int(os.environ.get("ATTENDANCE_RETRY_MINUTES", "20")),

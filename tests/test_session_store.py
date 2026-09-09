@@ -84,6 +84,33 @@ class ImportTests(SessionFileTests):
         self.assertEqual(len(cookies), 1)
 
 
+class LoginBlockTests(SessionFileTests):
+    """Remembering a refusal is what keeps the tool from re-confirming it daily."""
+
+    def test_a_block_is_remembered(self):
+        session_store.mark_login_blocked("email-verification")
+        blocked = session_store.login_block(7)
+        self.assertEqual(blocked["reason"], "email-verification")
+
+    def test_a_stale_block_is_ignored(self):
+        session_store.mark_login_blocked("email-verification")
+        state = session_store.read_state()
+        state["login_blocked"]["at"] = time.time() - 30 * 86400
+        session_store.get_session_file().write_text(json.dumps(state))
+        self.assertIsNone(session_store.login_block(7))
+
+    def test_no_block_reads_as_none(self):
+        self.assertIsNone(session_store.login_block(7))
+
+    def test_a_block_does_not_destroy_a_saved_session(self):
+        cookies = [{"name": "session", "value": "abc", "expires": time.time() + 86400}]
+        session_store.save_session(cookies, {"security_token": "s"})
+        session_store.mark_login_blocked("email-verification")
+        loaded_cookies, loaded_tokens = session_store.load_session()
+        self.assertEqual(loaded_cookies, cookies)
+        self.assertEqual(loaded_tokens, {"security_token": "s"})
+
+
 class SessionLifetimeTests(unittest.TestCase):
     def test_no_session_cookie_is_never_fresh(self):
         self.assertFalse(session_store.session_is_fresh([{"name": "fog"}], 7))

@@ -38,6 +38,18 @@ def get_legacy_cookies_file() -> Path:
     return get_data_dir() / LEGACY_COOKIES_FILE
 
 
+def read_state() -> dict:
+    """Return the raw session file contents, or {} when there is nothing readable."""
+    session_file = get_session_file()
+    if not session_file.exists():
+        return {}
+    try:
+        state = json.loads(session_file.read_text())
+        return state if isinstance(state, dict) else {}
+    except json.JSONDecodeError:
+        return {}
+
+
 def save_session(cookies: list, tokens: dict | None = None) -> None:
     """Write cookies and localStorage tokens out as one session."""
     payload = {
@@ -51,6 +63,32 @@ def save_session(cookies: list, tokens: dict | None = None) -> None:
         len(cookies),
         sorted(payload["tokens"]) or "none",
     )
+
+
+def mark_login_blocked(reason: str) -> None:
+    """
+    Record that logging in cannot work until somebody intervenes.
+
+    Without this the tool would keep trying: NodeSeek only turns the password
+    route down once it has seen a Turnstile token, so confirming the refusal costs
+    roughly twenty browser launches, every day, forever. Those launches are not
+    free -- a burst of them measurably sours Cloudflare's opinion of the address
+    they come from, which makes the token even harder to get once there is
+    something worth using it for.
+    """
+    state = read_state()
+    state["login_blocked"] = {"at": time.time(), "reason": reason}
+    get_session_file().write_text(json.dumps(state, indent=2, ensure_ascii=False))
+
+
+def login_block(max_age_days: float) -> dict | None:
+    """Return the recorded login block while it is still worth honouring."""
+    blocked = read_state().get("login_blocked")
+    if not isinstance(blocked, dict):
+        return None
+    if time.time() - blocked.get("at", 0) > max_age_days * 86400:
+        return None
+    return blocked
 
 
 def load_session() -> tuple[list, dict]:

@@ -27,6 +27,8 @@ from .session_store import (
     SECURITY_TOKEN_KEY,
     describe_session,
     load_session,
+    login_block,
+    mark_login_blocked,
     save_session,
     session_is_fresh,
 )
@@ -495,6 +497,25 @@ def do_login(config: dict) -> Optional[list]:
     return login_with_outcome(config)[0]
 
 
+def blocked_reason(config: dict) -> str:
+    """
+    Return why a login should not even be attempted, or "" to go ahead.
+
+    A recorded block is only honoured while nothing has changed that could lift
+    it: configuring a mailbox, or an imported session bringing a security token,
+    both put the login back within reach.
+    """
+    blocked = login_block(config.get("login_block_days", 7))
+    if not blocked:
+        return ""
+    if email_code.is_configured(config) and config.get("email_address"):
+        return ""
+    _, tokens = load_session()
+    if tokens.get(SECURITY_TOKEN_KEY):
+        return ""
+    return str(blocked.get("reason") or "a previous login was refused")
+
+
 def login_with_outcome(config: dict) -> tuple[Optional[list], str]:
     """
     Log in and persist the resulting session, reporting how it ended.
@@ -504,6 +525,17 @@ def login_with_outcome(config: dict) -> tuple[Optional[list], str]:
     until somebody changes something". Outcomes of the second kind stop the loop
     early instead of burning every retry.
     """
+    skip = blocked_reason(config)
+    if skip:
+        logger.error(
+            "Not attempting a login: %s. Confirming that again would cost about "
+            "twenty browser launches for nothing. Finish one sign-in with "
+            "--login-code, adopt a browser session with --import-session, or set "
+            "IMAP_* so the code can be read here.",
+            skip,
+        )
+        return None, OUTCOME_EMAIL_VERIFICATION
+
     delay = RETRY_BASE_DELAY
     seen: dict[str, int] = {}
     outcome = OUTCOME_ERROR
@@ -528,6 +560,8 @@ def login_with_outcome(config: dict) -> tuple[Optional[list], str]:
         seen[outcome] = seen.get(outcome, 0) + 1
         if seen[outcome] >= ATTEMPT_LIMITS.get(outcome, config["login_retries"] + 1):
             logger.error("Giving up after %d %s outcome(s); retrying cannot fix it", seen[outcome], outcome)
+            if outcome in BLOCKING_OUTCOMES:
+                mark_login_blocked(f"{outcome} ({detail})" if detail else outcome)
             return None, outcome
 
         if attempt >= config["login_retries"]:

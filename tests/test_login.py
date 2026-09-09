@@ -82,8 +82,11 @@ class SessionProbeTests(unittest.TestCase):
         )
 
 
-class RetryPolicyTests(unittest.TestCase):
-    def run_attempts(self, outcomes, retries=None, config=None, saved_tokens=None):
+class LoginDriver:
+    """Drives do_login over canned attempt results."""
+
+    def run_attempts(self, outcomes, retries=None, config=None, saved_tokens=None,
+                     recorded_block=None):
         """Drive do_login over canned attempt results, returning its answer and sleeps."""
         config = dict(config or {})
         config.setdefault("login_retries", retries or len(outcomes))
@@ -98,11 +101,15 @@ class RetryPolicyTests(unittest.TestCase):
             self.modes.append(mode)
             return next(results)
 
-        original = (login.do_login_attempt, login.save_session, login.load_session, login.time.sleep)
+        self.blocks: list = []
+        original = (login.do_login_attempt, login.save_session, login.load_session,
+                    login.login_block, login.mark_login_blocked, login.time.sleep)
         try:
             login.do_login_attempt = next_attempt
             login.save_session = lambda cookies, tokens: None
             login.load_session = lambda: ([], dict(saved_tokens or {}))
+            login.login_block = lambda days: recorded_block
+            login.mark_login_blocked = self.blocks.append
             login.time.sleep = slept.append
             cookies, self.outcome = login.login_with_outcome(config)
             return cookies, slept, len(self.modes)
@@ -111,8 +118,14 @@ class RetryPolicyTests(unittest.TestCase):
                 login.do_login_attempt,
                 login.save_session,
                 login.load_session,
+                login.login_block,
+                login.mark_login_blocked,
                 login.time.sleep,
             ) = original
+
+
+class RetryPolicyTests(LoginDriver, unittest.TestCase):
+    """Turnstile misses are worth retrying; a refused account is not."""
 
     def test_success_after_turnstile_misses(self):
         result, slept, attempts = self.run_attempts(
@@ -172,7 +185,7 @@ class LoginRouteTests(unittest.TestCase):
         )
 
 
-class RouteSwitchTests(RetryPolicyTests):
+class RouteSwitchTests(LoginDriver, unittest.TestCase):
     """Being told "verify by e-mail" is a routing instruction, not a dead end."""
 
     def test_email_verification_reroutes_the_next_attempt(self):
@@ -216,6 +229,44 @@ class RouteSwitchTests(RetryPolicyTests):
         )
         self.assertIsNone(result)
         self.assertEqual(attempts, 2)
+
+
+class LoginBlockTests(LoginDriver, unittest.TestCase):
+    """Confirming a refusal costs ~20 browser launches, so it is not re-confirmed daily."""
+
+    def test_a_confirmed_refusal_is_recorded(self):
+        self.run_attempts([login.OUTCOME_EMAIL_VERIFICATION] * 4, retries=4)
+        self.assertEqual(len(self.blocks), 1)
+        self.assertIn("email-verification", self.blocks[0])
+
+    def test_a_recorded_block_stops_the_login_before_any_browser_starts(self):
+        result, _, attempts = self.run_attempts(
+            [login.OUTCOME_SUCCESS], retries=4,
+            recorded_block={"at": 0, "reason": "email-verification"},
+        )
+        self.assertIsNone(result)
+        self.assertEqual(attempts, 0)
+
+    def test_a_mailbox_lifts_the_block(self):
+        result, _, attempts = self.run_attempts(
+            [login.OUTCOME_SUCCESS], retries=4, config=MAILBOX,
+            recorded_block={"at": 0, "reason": "email-verification"},
+        )
+        self.assertEqual(result, ["c"])
+        self.assertEqual(attempts, 1)
+
+    def test_a_security_token_lifts_the_block(self):
+        result, _, attempts = self.run_attempts(
+            [login.OUTCOME_SUCCESS], retries=4,
+            saved_tokens={"security_token": "abc"},
+            recorded_block={"at": 0, "reason": "email-verification"},
+        )
+        self.assertEqual(result, ["c"])
+        self.assertEqual(attempts, 1)
+
+    def test_bad_luck_is_never_recorded_as_a_block(self):
+        self.run_attempts([login.OUTCOME_NO_TURNSTILE] * 3, retries=3)
+        self.assertEqual(self.blocks, [])
 
 
 class SessionReuseTests(unittest.TestCase):

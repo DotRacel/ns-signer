@@ -67,8 +67,13 @@ services:
 - `BROWSER_PROFILE`：签到时是否保留浏览器 profile，默认 `true`。登录不会复用
   profile——登录靠的是不断换新浏览器去碰 Turnstile，复用反而会让每次重试都以同样的
   方式失败。
+- `PROXY`：给浏览器用的代理，例如 `http://user:pass@host:port`。Turnstile 肯不肯
+  发 token 主要取决于请求来自哪里——机房 IP 大约只有一成的页面能拿到，普通宽带几乎
+  每次都能拿到。这是唯一作用在病因上、而不是靠重试绕开的设置。
 - 邮箱验证码相关：`EMAIL_ADDRESS`、`IMAP_HOST`、`IMAP_PORT`、`IMAP_USERNAME`、
   `IMAP_PASSWORD`、`IMAP_MAILBOX`、`IMAP_SSL`。见下方「登录是怎么做的」。
+- `LOGIN_BLOCK_DAYS`：确认过「需要邮箱验证码但读不到」之后，多少天内不再重试，
+  默认 `7`。确认一次这种拒绝要烧掉约 20 次浏览器启动，所以不值得每天重来。
 
 然后在该目录下输入 `docker compose up -d`
 
@@ -148,3 +153,8 @@ Nodeseek 的登录并不是「POST 用户名密码，拿到 cookie」这么简�
 
 登录态本身有效期约 30 天，而且每次签到后都会把刷新过的 cookie 存回去，所以正常
 情况下并不需要频繁登录。
+
+需要注意的是：`/api/email`（请求验证码）的 Turnstile 校验在服务端，无法绕过——
+不带 token 返回 `"token" is required`，带假 token 返回「Cloudflare人机验证未通过」。
+所以在机房 IP 上，全自动登录的成败最终取决于能不能拿到 token；配 `PROXY` 是最直接
+的改善手段。

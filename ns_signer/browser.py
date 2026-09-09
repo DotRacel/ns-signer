@@ -65,6 +65,11 @@ def open_session(config: dict, *, keep_profile: bool, **overrides):
             "solve_cloudflare": config.get("solve_cloudflare", True),
             "timeout": config.get("login_timeout", 120000),
         }
+        # Cloudflare's verdict tracks the address far more than the browser: a
+        # datacenter one gets a Turnstile token on roughly a tenth of page loads,
+        # where an ordinary connection gets one nearly every time.
+        if config.get("proxy"):
+            options["proxy"] = config["proxy"]
         if profile:
             options["user_data_dir"] = profile
         options.update(overrides)
