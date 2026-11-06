@@ -81,6 +81,14 @@ services:
 
 然后在该目录下输入 `docker compose up -d`
 
+镜像内置 Tini 作为 PID 1，负责回收 Chrome 遗留的孤儿进程，避免长期运行时积累
+僵尸进程。已有部署需要拉取新镜像并重建容器，才能启用此修复并清除已积累的进程：
+
+```bash
+docker compose pull
+docker compose up -d --force-recreate
+```
+
 ## 常用操作
 
 手动执行一次签到：
